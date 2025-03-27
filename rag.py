@@ -20,12 +20,32 @@ load_dotenv()
 openai_client = AsyncOpenAI(api_key=os.getenv("OPEN_AI_API_KEY"))
 
 #Create dataframe to store docs
-df_rag_docs = pd.DataFrame(columns=["url", "chunk_number", "content", "metadata", "embedding"]) 
+df_rag_docs = pd.DataFrame(columns=["url", "chunk_number", "content", "metadata", "title", "summary","embedding"]) 
 
 # Create an asyncio lock to ensure thread-safe access to df
 lock = asyncio.Lock()
 
-
+async def get_title_and_summary(chunk: str, url: str) -> Dict[str, str]:
+    """Extract title and summary using GPT-4."""
+    system_prompt = """You are an AI designed to extract titles and summaries from sections of documentation. 
+                Return a JSON object containing two keys: 'title' and 'summary'. 
+                For the title: If this is the beginning of the document, extract the title. If it’s a middle section, generate a descriptive title based on the content. 
+                For the summary: Provide a brief and clear summary of the key points in this section. Ensure both the title and summary are short but informative."""
+    
+    try:
+        response = await openai_client.chat.completions.create(
+            model= "gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"URL: {url}\n\nContent:\n{chunk[:1000]}..."}  # Send first 1000 chars for context
+            ],
+            response_format={ "type": "json_object" }
+        )
+        return json.loads(response.choices[0].message.content)
+    except Exception as e:
+        print(f"Error getting title and summary: {e}")
+        return {"title": "Error processing title", "summary": "Error processing summary"}
+    
 async def get_embedding(text: str) -> List[float]:
     """Get embedding vector from OpenAI."""
     try:
@@ -41,7 +61,7 @@ async def get_embedding(text: str) -> List[float]:
 async def process_chunk(chunk: str, chunk_number: int, url: str) -> Dict:
     """Process a single chunk of text."""
     # Get title and summary
-    #extracted = await get_title_and_summary(chunk, url)
+    extracted_data = await get_title_and_summary(chunk, url)
     
     # Get embedding
     embedding = await get_embedding(chunk)
@@ -59,6 +79,8 @@ async def process_chunk(chunk: str, chunk_number: int, url: str) -> Dict:
         "chunk_number": chunk_number,
         "content": chunk,
         "metadata": metadata,
+        "title": extracted_data['title'],
+        "summary" : extracted_data['summary'],
         "embedding": embedding
     }
     return processed_chunk
